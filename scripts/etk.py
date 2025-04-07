@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 SIGMA_LIKELIHOOD = 0.025
-LATENT_DIM = 48
-HIDDEN_DIM = 64
+LATENT_DIM = 64
+HIDDEN_DIM = 128
 DROPOUT_PROB = 0.2
 
 class NeuralProcess(vdoe.inference.NeuralProcess):
@@ -125,11 +125,14 @@ def train(seed: int, dataset: str, output: str, epochs: int, batch: int, log: st
 
     vdoe.utils.io.save_model(output, inference, aux=dict(losses=losses))
 
-def test(seed: int, dataset: str, model: str, log: str, batch: int, progress: bool=True):
+def test(seed: int, dataset: str, model: str, log: str, n: int | None=None, progress: bool=True):
   rngs = nnx.Rngs(seed)
 
   data = np.load(dataset)
   initials, timestamps, samples = data['initial'], data['timestamps'], data['samples']
+  if n is not None:
+    initials, timestamps, samples = initials[:n], timestamps[:n], samples[:n]
+
   n_total, n_exp, n_init = initials.shape
   *_, n_t = timestamps.shape
 
@@ -187,7 +190,7 @@ def test(seed: int, dataset: str, model: str, log: str, batch: int, progress: bo
   print(mu_posterior.shape, sigma_posterior.shape)
 
   *_, n_z = mu_posterior.shape
-  n_samples = 64
+  n_samples = 16
   eps = jax.random.normal(rngs(), shape=(n_total, n_train + 1, 1, n_samples, n_z))
 
   ### (*, n_e, 1, n_samples, n_z)
@@ -206,7 +209,7 @@ def test(seed: int, dataset: str, model: str, log: str, batch: int, progress: bo
   fig = plt.figure(figsize=(n_test * 4 + 4, n_train * 4 + 4))
   axes = fig.subplots(n_train + 1, n_test + 1, squeeze=False)
 
-  display_index = 0
+  display_index = 2
 
   min_y, max_y = +1e+9, -1e+9
 

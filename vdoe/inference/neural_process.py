@@ -10,7 +10,8 @@ from flax import nnx
 __all__ = [
   'NeuralProcess',
   'meta_elbo',
-  'suggest'
+  'evaluate',
+  'suggest',
 ]
 
 def broadcast_left(array, target):
@@ -88,7 +89,7 @@ def meta_elbo(
   key: jax.Array, model: NeuralProcess,
   xs: jax.Array, ys: jax.Array,
   sigma_noise: float,
-  axes: int | Sequence[int]=(2, ),
+  axes: int | Sequence[int]=(1, ),
   mask: jax.Array | None=None,
   autoencoder: bool=False,
   subgradient: bool=False,
@@ -271,6 +272,21 @@ def expected_entropy(
   expected_entropy = jnp.sum(expected_log_sigmas, axis=-1)
   return jnp.mean(expected_entropy, axis=-1)
 
+def evaluate(
+  key: jax.Array, model: NeuralProcess, x: jax.Array,
+  prior_mu_inv_sigma_sqr: jax.Array, prior_sum_inv_sigmas_sqr: jax.Array,
+  n: int
+):
+  mu, sigma, _ = model.posterior(prior_mu_inv_sigma_sqr, prior_sum_inv_sigmas_sqr)
+  *batch, n_z = mu.shape
+  *_, n_x = x.shape
+
+  latent = jax.random.normal(key, shape=(*batch, n, n_z)) * sigma[..., None, :] + mu[..., None, :]
+  x = jnp.broadcast_to(x[..., None, :], shape=(*batch, n, n_x))
+  y = model.predict(latent, x)
+
+  return y
+
 def suggest(key, model: NeuralProcess, mu_inv_sigma_sqr: jax.Array, sum_inv_sigmas_sqr: jax.Array, sigma_noise: float, trials: int, n: int):
   key_initial, key_entropy = jax.random.split(key, num=2)
   *batch, n_z = mu_inv_sigma_sqr.shape
@@ -287,6 +303,25 @@ def suggest(key, model: NeuralProcess, mu_inv_sigma_sqr: jax.Array, sum_inv_sigm
   )
 
   best = jnp.argmin(entropy, axis=-1)
+
+  n = math.prod(batch)
+  probes_ = jnp.reshape(probes, shape=(n, trials, 1))
+
+  return probes_[jnp.arange(n), best.ravel(), :].reshape((*batch, 1))
+
+def exploit(key, model: NeuralProcess, mu_inv_sigma_sqr: jax.Array, sum_inv_sigmas_sqr: jax.Array, trials: int, n: int):
+  key_initial, key_ = jax.random.split(key, num=2)
+  *batch, n_z = mu_inv_sigma_sqr.shape
+
+  probes = jax.random.uniform(key_initial, shape=(*batch, trials, 1), minval=-1, maxval=1)
+  predictions = evaluate(
+    key, model, probes,
+    prior_mu_inv_sigma_sqr=jnp.broadcast_to(mu_inv_sigma_sqr[..., None, :], shape=(*batch, trials, n_z)),
+    prior_sum_inv_sigmas_sqr=jnp.broadcast_to(sum_inv_sigmas_sqr[..., None, :], shape=(*batch, trials, n_z)),
+    n=n
+  )
+
+  best = jnp.argmin(jnp.mean(predictions, axis=(-2, -1)), axis=-1)
 
   n = math.prod(batch)
   probes_ = jnp.reshape(probes, shape=(n, trials, 1))

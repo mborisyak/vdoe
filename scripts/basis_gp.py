@@ -20,12 +20,14 @@ DROPOUT_PROB = 0.2
 ORDER = 7
 POINTS = 16
 LATENT_DIM = 32
+CONTROL_DIM = 1
+TARGET_DIM = 1
 
 class NeuralProcess(vdoe.inference.NeuralProcess):
   def __init__(self, rngs: nnx.Rngs):
     super().__init__(
-      encoder=vdoe.nn.AlphaResAttentionBlock(2, 32, LATENT_DIM, depth=6, rngs=rngs, activation=nnx.swish),
-      decoder=vdoe.nn.AlphaResBlock(LATENT_DIM + 1, 32, 1, depth=6, rngs=rngs, activation=nnx.swish),
+      encoder=vdoe.nn.AlphaResAttentionBlock(CONTROL_DIM + TARGET_DIM, 32, LATENT_DIM, depth=6, rngs=rngs, activation=nnx.swish),
+      decoder=vdoe.nn.AlphaResBlock(LATENT_DIM + CONTROL_DIM, 32, TARGET_DIM, depth=6, rngs=rngs, activation=nnx.swish),
       rngs=rngs
     )
 
@@ -78,7 +80,8 @@ def train(
       sigma_noise=SIGMA_LIKELIHOOD,
       autoencoder=autoencoder,
       subgradient=subgradient,
-      l2_reg=1.0e-6,
+      axes=(1, ),
+      l2_reg=1.0e-3,
       sigma_reg=1.0e-3
     )
 
@@ -157,7 +160,6 @@ def show(seed: int, log: str, n: int=5, points: int=32, order: int=3):
   plt.close(fig)
 
 
-
 def doe(seed: int, model: str, log: str, n: int=5, iterations: int=11, progress: bool=True):
   n_grid = 67
   n_test_samples = 163
@@ -171,6 +173,8 @@ def doe(seed: int, model: str, log: str, n: int=5, iterations: int=11, progress:
   Xs = np.ndarray(shape=(n, iterations, 1))
   ys = np.ndarray(shape=(n, iterations, 1))
   fs = np.ndarray(shape=(n, iterations, 1))
+  Xs_guesses = np.ndarray(shape=(n, iterations, 1))
+  fs_guesses = np.ndarray(shape=(n, iterations, 1))
 
   predictions = np.ndarray(shape=(n, iterations, n_grid, n_test_samples, 1))
 
@@ -199,10 +203,21 @@ def doe(seed: int, model: str, log: str, n: int=5, iterations: int=11, progress:
       trials=65, n=63
     )
 
+    guesses = vdoe.inference.exploit(
+      rngs(), inference,
+      mu_inv_sigma_sqr=prior_mu_inv_sigma_sqr,
+      sum_inv_sigmas_sqr=prior_sum_inv_sigmas_sqr,
+      trials=65, n=63
+    )
+
     f_iter, y_iter = evaluate(rngs(), suggestions[:, None, 0], ws,)
     Xs[:, i, :] = suggestions
     fs[:, i, :] = f_iter[:, 0, None]
     ys[:, i, :] = y_iter[:, 0, None]
+
+    f_guess_iter, y_guess_iter = evaluate(rngs(), guesses[:, None, 0], ws, )
+    Xs_guesses[:, i, :] = guesses[:, None, 0]
+    fs_guesses[:, i, :] = f_guess_iter[:, None, 0]
 
     mu_iter, sigma_raw_iter = inference.encoder(jnp.concatenate([suggestions, y_iter], axis=-1)[:, None, :])
     mu_inv_sigma_sqr_iter, sum_inv_sigmas_sqr_iter = inference.aggregate(mu_iter, sigma_raw_iter, axes=())
@@ -217,7 +232,8 @@ def doe(seed: int, model: str, log: str, n: int=5, iterations: int=11, progress:
   for i in range(n):
     for j in range(iterations):
       low, med, high = np.quantile(predictions[i, j, :, :, 0], q=(0.2, 0.5, 0.8), axis=-1)
-      axes[i, j].scatter([Xs[i, j, 0]], [ys[i, j, 0]], color=plt.cm.tab10(1), label='proposed' if i == j == 0 else None)
+      axes[i, j].scatter([Xs_guesses[i, j, 0]], [fs_guesses[i, j, 0]], color=plt.cm.tab10(2), label='guessed' if i == j == 0 else None)
+      axes[i, j].scatter([Xs[i, j, 0]], [fs[i, j, 0]], color=plt.cm.tab10(1), label='proposed' if i == j == 0 else None)
       axes[i, j].scatter(Xs[i, :j, 0], ys[i, :j, 0], color=plt.cm.tab10(0), label='observed' if i == j == 0 else None)
       axes[i, j].plot(grid, f_grid[i], color='black', linestyle='--', label='true function' if i == j == 0 else None)
       axes[i, j].fill_between(grid, low, high, alpha=0.25, color=plt.cm.tab10(0), label='20-80 percentiles' if i == j == 0 else None)
@@ -228,7 +244,7 @@ def doe(seed: int, model: str, log: str, n: int=5, iterations: int=11, progress:
 
     fig.suptitle(f'Chebyshev Polynomials (order={ORDER})')
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncols=5)
+    fig.legend(handles, labels, loc='upper center', ncols=6)
 
   fig.tight_layout(h_pad=1.0)
   fig.savefig(log)
