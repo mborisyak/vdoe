@@ -4,12 +4,14 @@ import math
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from flax import nnx
 
+from vdoe import utils
+from vdoe.inference.common import Inference
+
 __all__ = [
-  'NeuralProcess',
+  'FastNeuralProcess',
   'meta_elbo',
   'fast_meta_elbo',
   'expected_entropy'
@@ -17,7 +19,7 @@ __all__ = [
 
 LOG_2_PI = math.log(2 * math.pi)
 
-class NeuralProcess(nnx.Module):
+class FastNeuralProcess(Inference, nnx.Module):
   ### axis for concatenation
   feature_axis: int = 2
 
@@ -36,28 +38,6 @@ class NeuralProcess(nnx.Module):
       self.encoder = encoder
 
     self.decoder = decoder
-
-  @classmethod
-  def covariant(
-    cls, mus: jax.Array, sigmas_raw: jax.Array,
-    mask: jax.Array | None = None
-  ):
-    """
-    Covariant transformation.
-
-    :param mus: means of sample posteriors;
-    :param sigmas_raw: raw sigmas of sample posteriors;
-    :param mask: aggregation mask;
-    :return: mus, aggregate mu, aggregated sigma.
-    """
-    mu_inv_sigma_sqr, sum_inv_sigmas_sqr = cls.aggregate(
-      mus, sigmas_raw, keepdims=True, mask=mask
-    )
-    mu_posterior, sigma_posterior, _ = cls.posterior(mu_inv_sigma_sqr, sum_inv_sigmas_sqr)
-    mus_aggregated = jnp.broadcast_to(mu_posterior, mus.shape)
-    sigma_aggregated = jnp.broadcast_to(sigma_posterior, mus.shape)
-
-    return jnp.concatenate([mus, mus_aggregated, sigma_aggregated], axis=cls.feature_axis)
 
   @classmethod
   def aggregate(cls, mus, sigmas_raw, keepdims: bool = False, mask: jax.Array | None = None):
